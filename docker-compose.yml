@@ -1,0 +1,52 @@
+services:
+  goalrush-epg-generator:
+    build: $DOCKERDIR/builds/epg-generator
+    container_name: goalrush-epg-generator
+    restart: unless-stopped
+    environment:
+      # Premier League season to pull fixtures for, e.g. "2026-27"
+      SEASON: "2026-27"
+      # tvg-id to assign to this channel in Dispatcharr
+      CHANNEL_ID: "PremierLeagueGoalRush.us"
+      CHANNEL_NAME: "Premier League Goal Rush"
+      # Optional: URL to a logo image for the channel
+      CHANNEL_ICON: ""
+      # How many matches must share a kickoff time to count as a
+      # "Goal Rush" window. Peacock doesn't publish this schedule
+      # publicly, so this is a best-effort heuristic — tune as needed.
+      MIN_CONCURRENT_MATCHES: "3"
+      # How long each generated programme block runs, in minutes
+      PROGRAMME_DURATION_MINUTES: "135"
+      OUTPUT_PATH: "/output/guide.xml"
+      # How far back to keep already-aired programmes in the output
+      PAST_DAYS_TO_KEEP: "1"
+      # Hour (UTC, 0-23) the daily refresh runs at
+      REFRESH_HOUR_UTC: "6"
+      # How many upcoming Goal Rush windows to generate the guide out
+      # to. <= 0 means unlimited (through the end of the season).
+      MATCHDAYS_AHEAD: "3"
+      # Timezone used to decide where "day" boundaries fall when
+      # splitting filler into daily blocks. Set this to match whatever
+      # timezone Dispatcharr displays the guide in, so filler days line
+      # up with real calendar days on-screen.
+      DAY_BOUNDARY_TZ: "America/New_York"
+      # Fill gaps between Goal Rush windows with a placeholder programme
+      FILLER_ENABLED: "true"
+      FILLER_TITLE: "Premier League Goal Rush is not live right now"
+      FILLER_DESC: "Premier League Goal Rush is not scheduled for this time. Check back during busy Premier League match windows for live Goal Rush coverage."
+      # Skip filler blocks shorter than this (avoids noisy slivers)
+      MIN_FILLER_GAP_MINUTES: "2"
+    volumes:
+      - $DOCKERDIR/appdata/epg-data:/output
+  goalrush-epg-server:
+    image: nginx:alpine
+    container_name: goalrush-epg-server
+    restart: unless-stopped
+    depends_on:
+      - goalrush-epg-generator
+    ports:
+      - "8098:80"
+    volumes:
+      - $DOCKERDIR/appdata/epg-data:/usr/share/nginx/html:ro
+volumes:
+  epg-data:

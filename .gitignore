@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+.env
+output/
+guide.xml
+guide.xml.tmp
