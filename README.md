@@ -12,11 +12,25 @@ festive fixtures, the final day of the season, etc.), and availability
 "varies" according to Peacock's own help docs.
 
 This tool works around that by pulling the full Premier League fixture list
-(free, no API key, from the [openfootball](https://github.com/openfootball)
-project) and generating a programme block for every window where **3 or more
+(free, no API key) and generating a programme block for every window where **3 or more
 matches share a kickoff time**. That's a strong proxy for Goal Rush slates,
 but it isn't Peacock's actual editorial calendar — tune
 `MIN_CONCURRENT_MATCHES` if it over- or under-fires for you.
+
+### Fixture sources
+
+Fixtures are fetched from these sources, in order, using the first one that
+works:
+
+1. **[Fantasy Premier League API](https://fantasy.premierleague.com/api/fixtures/)**
+   — the Premier League's own feed. Kickoff times are updated as TV picks
+   move matches, so it tracks reschedules closely.
+2. **[fixturedownload.com](https://fixturedownload.com/)** — used if FPL is
+   down, or isn't yet serving the configured `SEASON` (FPL only ever serves
+   the current season, so this matters around the summer changeover).
+
+If both fail, the previous `guide.xml` is left in place and the generator
+retries every 30 minutes.
 
 The rest of the guide (from the current hour through the next few Goal Rush
 windows) is filled with a placeholder programme ("Premier League Goal Rush
@@ -98,6 +112,6 @@ When the 2027-28 fixture list is published (usually mid-June), just bump
 - This is a heuristic, not Peacock's actual broadcast confirmation. Some
   detected windows may not actually get Goal Rush coverage, and Peacock
   could occasionally run it for a smaller slate.
-- If a match gets rescheduled after the season fixture list is generated
-  (common with PL matches once TV picks are confirmed closer to the date),
-  the openfootball data may lag until it's updated upstream.
+- Kickoff changes only appear once the fixture source publishes them, and
+  the guide only refreshes once a day (`REFRESH_HOUR_UTC`), so a very
+  late reschedule may take up to a day to show up.

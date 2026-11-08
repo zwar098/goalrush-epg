@@ -5,9 +5,13 @@ windows where multiple Premier League matches kick off at the same
 time (the classic simultaneous "blackout slot" pattern Peacock uses
 for its whip-around Goal Rush coverage).
 
-Data source: openfootball/england (free, public domain, no API key)
-https://github.com/openfootball/england
-Format reference: https://github.com/openfootball/football.txt
+Data sources (free, no API key), tried in order:
+  1. Fantasy Premier League API — the Premier League's own feed, updated
+     as TV picks move kickoff times
+     https://fantasy.premierleague.com/api/fixtures/
+  2. fixturedownload.com JSON feed — fallback if FPL is down or not yet
+     serving the configured season
+     https://fixturedownload.com/
 
 NOTE: Peacock does not publish which weeks actually get Goal Rush
 coverage ("availability varies" per their own help docs). This script
@@ -16,8 +20,8 @@ MIN_CONCURRENT_MATCHES via environment variable if it's over- or
 under-firing for your needs.
 """
 
+import json
 import os
-import re
 import sys
 import urllib.request
 import urllib.error
@@ -57,139 +61,98 @@ FILLER_DESC = os.environ.get(
 # from rounding/edge cases.
 MIN_FILLER_GAP_MINUTES = int(os.environ.get("MIN_FILLER_GAP_MINUTES", "2"))
 
-# Kickoff times in the source data are UK local time
-UK_TZ = ZoneInfo("Europe/London")
 UTC = timezone.utc
 
-DATA_URLS = [
-    f"https://raw.githubusercontent.com/openfootball/england/master/{SEASON}/1-premierleague.txt",
-    # Fallback: JSON mirror (usually only available for completed seasons)
-    f"https://raw.githubusercontent.com/openfootball/football.json/master/{SEASON}/en.1.json",
-]
-
-MATCHDAY_RE = re.compile(r"^\s*[▪*]\s*(Matchday\s+\d+.*)$")
-# e.g. "  Sat Aug 29" or "  Fri Aug 21 2026" or "  Sat Jan 2 2027"
-DAY_RE = re.compile(
-    r"^\s{1,4}(?P<wd>[A-Z][a-z]{2})\s+(?P<mon>[A-Z][a-z]{2})\s+(?P<day>\d{1,2})(?:\s+(?P<year>\d{4}))?\s*$"
-)
-# e.g. "    20:00  Arsenal FC              v Coventry City FC"
-# or continuation "           Nottingham Forest FC    v Leeds United FC"
-MATCH_RE = re.compile(
-    r"^\s+(?:(?P<time>\d{1,2}:\d{2})\s+)?(?P<team1>.+?)\s+v\s+(?P<team2>.+?)\s*$"
-)
-
-MONTHS = {
-    "Jan": 1, "Feb": 2, "Mar": 3, "Apr": 4, "May": 5, "Jun": 6,
-    "Jul": 7, "Aug": 8, "Sep": 9, "Oct": 10, "Nov": 11, "Dec": 12,
-}
+SEASON_START_YEAR = int(SEASON.split("-")[0])
+FPL_FIXTURES_URL = "https://fantasy.premierleague.com/api/fixtures/"
+FPL_BOOTSTRAP_URL = "https://fantasy.premierleague.com/api/bootstrap-static/"
+FIXTUREDOWNLOAD_URL = f"https://fixturedownload.com/feed/json/epl-{SEASON_START_YEAR}"
 
 
-def fetch_text(url):
+def fetch_json(url):
     req = urllib.request.Request(url, headers={"User-Agent": "goalrush-epg/1.0"})
     with urllib.request.urlopen(req, timeout=30) as resp:
-        return resp.read().decode("utf-8")
+        return json.loads(resp.read().decode("utf-8"))
 
 
-def parse_football_txt(text, season):
-    """Parses the openfootball football.txt format into a list of
-    {date: 'YYYY-MM-DD', time: 'HH:MM', team1, team2, round} dicts."""
-    season_start_year = int(season.split("-")[0])
-    current_year = season_start_year
-    current_date = None
-    current_round = ""
-    current_time = None
+def parse_utc(text):
+    """Parses an ISO-ish UTC timestamp such as '2026-11-08T14:00:00Z'
+    or '2026-11-08 14:00:00Z'."""
+    return datetime.fromisoformat(text.replace(" ", "T").replace("Z", "+00:00")).astimezone(UTC)
+
+
+def check_season(matches, source):
+    """FPL only ever serves the current season, so between seasons it
+    may still be returning last year's fixtures. Reject anything that
+    doesn't belong to the configured SEASON."""
+    first = min(m["start"] for m in matches)
+    if first.year != SEASON_START_YEAR:
+        raise ValueError(
+            f"{source} is serving a season starting {first.year}, not {SEASON}"
+        )
+
+
+def fetch_fpl():
+    teams = {t["id"]: t["name"] for t in fetch_json(FPL_BOOTSTRAP_URL)["teams"]}
     matches = []
-
-    for line in text.splitlines():
-        if not line.strip():
-            continue
-
-        m = MATCHDAY_RE.match(line)
-        if m:
-            current_round = m.group(1).strip()
-            current_time = None
-            continue
-
-        m = DAY_RE.match(line)
-        if m and " v " not in line:
-            mon = MONTHS.get(m.group("mon"))
-            day = int(m.group("day"))
-            year = int(m.group("year")) if m.group("year") else current_year
-            current_year = year
-            current_date = f"{year:04d}-{mon:02d}-{day:02d}"
-            current_time = None
-            continue
-
-        m = MATCH_RE.match(line)
-        if m and current_date:
-            if m.group("time"):
-                current_time = m.group("time")
-                if len(current_time.split(":")[0]) == 1:
-                    current_time = "0" + current_time
-            if current_time is None:
-                continue  # can't place this match without a kickoff time
-            matches.append(
-                {
-                    "date": current_date,
-                    "time": current_time,
-                    "team1": m.group("team1").strip(),
-                    "team2": m.group("team2").strip(),
-                    "round": current_round,
-                }
-            )
-
+    for f in fetch_json(FPL_FIXTURES_URL):
+        if not f.get("kickoff_time"):
+            continue  # postponed / not yet scheduled
+        matches.append(
+            {
+                "start": parse_utc(f["kickoff_time"]),
+                "team1": teams.get(f["team_h"], f"Team {f['team_h']}"),
+                "team2": teams.get(f["team_a"], f"Team {f['team_a']}"),
+                "round": f"Matchday {f['event']}" if f.get("event") else "",
+            }
+        )
     return matches
 
 
-def parse_json_mirror(text):
-    import json
+def fetch_fixturedownload():
+    matches = []
+    for f in fetch_json(FIXTUREDOWNLOAD_URL):
+        if not f.get("DateUtc"):
+            continue
+        matches.append(
+            {
+                "start": parse_utc(f["DateUtc"]),
+                "team1": f["HomeTeam"],
+                "team2": f["AwayTeam"],
+                "round": f"Matchday {f['RoundNumber']}" if f.get("RoundNumber") else "",
+            }
+        )
+    return matches
 
-    data = json.loads(text)
-    out = []
-    for m in data.get("matches", []):
-        if m.get("date") and m.get("time"):
-            out.append(
-                {
-                    "date": m["date"],
-                    "time": m["time"],
-                    "team1": m["team1"],
-                    "team2": m["team2"],
-                    "round": m.get("round", ""),
-                }
-            )
-    return out
+
+SOURCES = [
+    ("FPL API", fetch_fpl),
+    ("fixturedownload.com", fetch_fixturedownload),
+]
 
 
 def fetch_fixtures():
     last_err = None
-    for url in DATA_URLS:
+    for name, fetch in SOURCES:
         try:
-            print(f"Fetching fixtures from {url}", file=sys.stderr)
-            text = fetch_text(url)
-            if url.endswith(".json"):
-                matches = parse_json_mirror(text)
-            else:
-                matches = parse_football_txt(text, SEASON)
-            if matches:
-                print(f"Parsed {len(matches)} fixtures for {SEASON}", file=sys.stderr)
-                return matches
-        except (urllib.error.URLError, urllib.error.HTTPError, ValueError) as e:
+            print(f"Fetching fixtures from {name}", file=sys.stderr)
+            matches = fetch()
+            if not matches:
+                raise ValueError("no fixtures returned")
+            check_season(matches, name)
+            print(f"Parsed {len(matches)} fixtures for {SEASON} from {name}", file=sys.stderr)
+            return matches
+        except (urllib.error.URLError, ValueError, KeyError, TypeError) as e:
             print(f"  failed: {e}", file=sys.stderr)
             last_err = e
-            continue
     raise RuntimeError(f"Could not fetch fixture data for season {SEASON}: {last_err}")
 
 
 def group_by_kickoff(matches):
     groups = defaultdict(list)
     for m in matches:
-        groups[(m["date"], m["time"])].append(m)
+        groups[m["start"]].append(m)
     return groups
-
-
-def kickoff_to_utc(date, time):
-    local_dt = datetime.strptime(f"{date} {time}", "%Y-%m-%d %H:%M").replace(tzinfo=UK_TZ)
-    return local_dt.astimezone(UTC)
 
 
 def floor_to_hour(dt):
@@ -203,13 +166,8 @@ def build_programmes(groups):
     now_utc = datetime.now(UTC)
     cutoff = now_utc - timedelta(days=PAST_DAYS_TO_KEEP)
 
-    for (date, time), matches in sorted(groups.items()):
+    for start_utc, matches in sorted(groups.items()):
         if len(matches) < MIN_CONCURRENT_MATCHES:
-            continue
-
-        try:
-            start_utc = kickoff_to_utc(date, time)
-        except ValueError:
             continue
 
         stop_utc = start_utc + timedelta(minutes=PROGRAMME_DURATION_MINUTES)
