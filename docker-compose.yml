@@ -1,6 +1,10 @@
 services:
   goalrush-epg-generator:
-    build: $DOCKERDIR/builds/epg-generator
+    # Prebuilt image published from this repo. ":1" picks up 1.x fixes
+    # on "docker compose pull"; pin to e.g. ":1.0.0" to stay put.
+    # To build from source instead, replace this line with:
+    #   build: ./epg-generator
+    image: ghcr.io/zwar098/goalrush-epg:1
     container_name: goalrush-epg-generator
     restart: unless-stopped
     environment:

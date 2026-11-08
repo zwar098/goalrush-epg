@@ -42,11 +42,15 @@ isn't covered by the real programme (before and/or after it).
 
 ## Quick start
 
+Copy [`docker-compose.yml`](docker-compose.yml) to your Docker host, set
+`DOCKERDIR` (or edit the volume paths), then:
+
 ```bash
-docker compose up -d --build
+docker compose up -d
 ```
 
-This starts two containers:
+This pulls the prebuilt image `ghcr.io/zwar098/goalrush-epg` (amd64 and
+arm64) and starts two containers:
 
 - **goalrush-epg-generator** — fetches fixtures once on startup, writes
   `guide.xml`, then re-runs daily at 06:00 UTC (configurable via
@@ -91,7 +95,7 @@ regardless of `PAST_DAYS_TO_KEEP` — that variable only controls how long an
 already-*started* Goal Rush programme stays visible after it begins airing,
 not how far back filler reaches).
 
-After changing anything, run `docker compose up -d --build` again.
+After changing anything, run `docker compose up -d` again.
 
 ## Updating the schedule
 
@@ -101,6 +105,30 @@ force an immediate refresh without waiting:
 ```bash
 docker compose restart goalrush-epg-generator
 ```
+
+## Upgrading
+
+```bash
+docker compose pull && docker compose up -d
+```
+
+The compose file uses the `:1` tag, so this picks up any 1.x release.
+Releases are listed on the
+[Releases page](https://github.com/zwar098/goalrush-epg/releases).
+
+To build from source instead of pulling, replace the `image:` line in
+`docker-compose.yml` with `build: ./epg-generator` and run
+`docker compose up -d --build`.
+
+## Releasing (maintainers)
+
+Push a version tag and GitHub Actions builds and publishes the image:
+
+```bash
+git tag v1.2.3 && git push origin v1.2.3
+```
+
+That produces the image tags `1.2.3`, `1.2`, `1` and `latest`.
 
 ## Next season
 
